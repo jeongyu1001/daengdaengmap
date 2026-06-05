@@ -3,6 +3,7 @@ import streamlit.components.v1 as components
 import pandas as pd
 import json
 import os
+import urllib.parse
 from pathlib import Path
 from datetime import datetime, timedelta
 import requests
@@ -318,7 +319,8 @@ def ai_recommend_course(dog_name: str, dog_size: str, places: list[dict]) -> str
         f"[검증된 반려동물 동반 가능 장소 목록]\n{places_text}\n\n"
         f"위 목록을 참고해 오전·점심·오후 3~4곳의 하루 코스를 짜주세요.\n"
         f"각 장소마다 ① 장소명 ② 주소 ③ 동반 조건 ④ 선정 이유(1줄)를 포함하고,\n"
-        f"이동 순서와 동선이 자연스럽도록 구성해 한국어로 답변해주세요."
+        f"이동 순서와 동선이 자연스럽도록 구성해 한국어로 답변해주세요.\n"
+        f"URL, 지도 링크, 웹사이트 주소는 절대 포함하지 마세요."
     )
     resp = requests.post(
         "https://api.ennoia.so/api/preset/v2/chat/completions",
@@ -540,6 +542,14 @@ if st.session_state.course_cards:
         addr_short = p["addr"][:35] + ("…" if len(p["addr"]) > 35 else "")
         info_line  = (f'<div style="font-size:0.72rem;color:#999;margin-top:6px;line-height:1.4">'
                       f'{p["info"][:45]}</div>') if p["info"] != "정보없음" else ""
+        map_link = (
+            f'https://map.kakao.com/link/map/{urllib.parse.quote(p["title"])},{p["mapy"]},{p["mapx"]}'
+            if p.get("mapx") and p.get("mapy") else ""
+        )
+        map_btn = (f'<div style="margin-top:8px"><a href="{map_link}" target="_blank" '
+                   f'style="font-size:0.7rem;color:#8B5CF6;text-decoration:none;'
+                   f'border:1px solid #C4B5FD;border-radius:8px;padding:2px 8px;white-space:nowrap">'
+                   f'🗺️ 카카오맵에서 보기</a></div>') if map_link else ""
         with col:
             st.markdown(f"""
             <div style="background:{cs['bg']};border:2px solid {cs['border']};
@@ -556,6 +566,7 @@ if st.session_state.course_cards:
               <span style="background:#EEE;color:#666;padding:2px 8px;
                            border-radius:10px;font-size:0.7rem;margin-left:4px">{p['size']}</span>
               {info_line}
+              {map_btn}
             </div>""", unsafe_allow_html=True)
 
 elif st.session_state.course_ai_text:
