@@ -265,6 +265,10 @@ if(cp.length>0){{
   }});
   map.setCenter(new kakao.maps.LatLng(cp[0].mapy,cp[0].mapx));
   map.setLevel(10);
+}}else if(markers.length>0){{
+  var bounds=new kakao.maps.LatLngBounds();
+  markers.forEach(function(m){{bounds.extend(m.getPosition());}});
+  map.setBounds(bounds,60);
 }}
 </script></body></html>"""
 
