@@ -931,7 +931,18 @@ else:
         build_map_html(places_df.to_dict("records"), KAKAO_JS_KEY, map_focus_places),
         encoding="utf-8"
     )
-    components.iframe(f"app/static/map_{st.session_state.map_session_id}.html", height=555)
+    try:
+        _host = st.context.headers.get("Host", "")
+        _scheme = "http" if (_host.startswith("localhost") or _host.startswith("127.")) else "https"
+        _base = (st.get_option("server.baseUrlPath") or "").strip("/")
+        _fname = f"map_{st.session_state.map_session_id}.html"
+        if _base:
+            _map_url = f"{_scheme}://{_host}/{_base}/static/{_fname}"
+        else:
+            _map_url = f"{_scheme}://{_host}/app/static/{_fname}"
+    except Exception:
+        _map_url = f"app/static/map_{st.session_state.map_session_id}.html"
+    components.iframe(_map_url, height=555)
 
 # ── 코스 추천 결과 ─────────────────────────────────────────────────
 recommendation_cards = st.session_state.course_cards or filter_map_picks
