@@ -4,6 +4,7 @@ import pandas as pd
 import json
 import os
 import re
+import uuid
 import urllib.parse
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -921,11 +922,16 @@ else:
         if st.session_state.course_map_places
         else filter_map_picks
     )
-    components.html(
-        build_map_html(places_df.to_dict("records"), KAKAO_JS_KEY,
-                       map_focus_places),
-        height=550,
+    if "map_session_id" not in st.session_state:
+        st.session_state.map_session_id = uuid.uuid4().hex[:10]
+    static_dir = BASE_DIR / "static"
+    static_dir.mkdir(exist_ok=True)
+    map_file = static_dir / f"map_{st.session_state.map_session_id}.html"
+    map_file.write_text(
+        build_map_html(places_df.to_dict("records"), KAKAO_JS_KEY, map_focus_places),
+        encoding="utf-8"
     )
+    components.iframe(f"app/static/map_{st.session_state.map_session_id}.html", height=555)
 
 # ── 코스 추천 결과 ─────────────────────────────────────────────────
 recommendation_cards = st.session_state.course_cards or filter_map_picks
