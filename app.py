@@ -206,29 +206,77 @@ def load_data() -> pd.DataFrame:
     return df
 
 # ── 카카오맵 HTML (클러스터링 + 범례 + 코스 마커 + 운영시간/홈페이지) ──
+KAKAO_SDK_FALLBACK_PATH = BASE_DIR / "assets" / "kakao_maps_sdk.js"
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_kakao_sdk_script(key: str) -> str:
-    try:
-        resp = requests.get(
-            "https://dapi.kakao.com/v2/maps/sdk.js",
-            params={"appkey": key, "autoload": "false"},
-            timeout=8,
-        )
-        resp.raise_for_status()
-        return resp.text
-    except Exception:
-        return ""
+    sdk_script = ""
+    # Prefer bundled fallback first: Cloud runtime has frequent external SDK load restrictions.
+    if KAKAO_SDK_FALLBACK_PATH.exists():
+        try:
+            sdk_script = KAKAO_SDK_FALLBACK_PATH.read_text(encoding="utf-8")
+        except Exception:
+            sdk_script = ""
+
+    if not sdk_script:
+        try:
+            resp = requests.get(
+                "https://dapi.kakao.com/v2/maps/sdk.js",
+                params={"appkey": key, "autoload": "false"},
+                timeout=8,
+            )
+            resp.raise_for_status()
+            sdk_script = resp.text
+        except Exception:
+            sdk_script = ""
+
+    if sdk_script:
+        sdk_script = sdk_script.replace("http://t1.daumcdn.net", "https://t1.daumcdn.net")
+        sdk_script = sdk_script.replace('s+"//t1.daumcdn.net', '"https://t1.daumcdn.net')
+        sdk_script = sdk_script.replace('s+"//mts.daumcdn.net', '"https://mts.daumcdn.net')
+        sdk_script = sdk_script.replace('u="http://mts.daumcdn.net', 'u="https://mts.daumcdn.net')
+        return sdk_script.replace("</script", "<\\/script")
+    return ""
 
 def build_map_html(places: list[dict], key: str, course_places: list[dict] = None) -> str:
     places_js = json.dumps(places,          ensure_ascii=False)
     course_js = json.dumps(course_places or [], ensure_ascii=False)
     cat_js    = json.dumps(CAT_COLORS,      ensure_ascii=False)
     size_js   = json.dumps(SIZE_COLORS,     ensure_ascii=False)
-    sdk_script_js = json.dumps(load_kakao_sdk_script(key))
+    course_order_js = json.dumps(COURSE_ORDER, ensure_ascii=False)
+    sdk_url = (
+        'https://dapi.kakao.com/v2/maps/sdk.js?'
+        f'appkey={urllib.parse.quote(key)}&autoload=false'
+    )
+    sdk_script = load_kakao_sdk_script(key)
     sdk_loader = (
-        '<script src="https://dapi.kakao.com/v2/maps/sdk.js?'
-        f'appkey={urllib.parse.quote(key)}&autoload=false" '
-        'onload="initKakaoMap()" onerror="handleKakaoMapLoadError()"></script>'
+        '<script>'
+        '  window.handleKakaoMapLoadError = window.handleKakaoMapLoadError || function(){};'
+        '  window.__kakaoMapInitAttempts = 0;'
+        '  window.__kakaoMapInitialized = false;'
+        '  window.__kakaoMapInit = function() {'
+        '    if (window.__kakaoMapInitialized) { return; }'
+        '    if (window.kakao && window.kakao.maps && window.kakao.maps.version) {'
+        '      window.__kakaoMapInitialized = true;'
+        '      try { initKakaoMap(); } catch (err) { '
+        '        if (window.console && window.console.error) { console.error(err); } '
+        '        handleKakaoMapLoadError(); '
+        '      }'
+        '      return;'
+        '    }'
+        '    window.__kakaoMapInitAttempts += 1;'
+        '    if (window.__kakaoMapInitAttempts > 150) {'
+        '      handleKakaoMapLoadError();'
+        '      return;'
+        '    }'
+        '    setTimeout(window.__kakaoMapInit, 80);'
+        '  };'
+        '</script>' +
+        (f'<script>{sdk_script}</script><script>__kakaoMapInit();</script>')
+        if sdk_script
+        else (
+            f'<script src="{sdk_url}" onload="__kakaoMapInit()" onerror="handleKakaoMapLoadError()"></script>'
+        )
     )
 
     if course_places:
@@ -244,10 +292,10 @@ def build_map_html(places: list[dict], key: str, course_places: list[dict] = Non
         )
     else:
         legend_items = [
-            ("시도별 그룹 마커", "linear-gradient(135deg,#FFD6E7,#E9D5FF)", "12px"),
-            ("500곳 미만", "#FFD6E7", "10px"),
-            ("500-1,500곳", "#E9D5FF", "12px"),
-            ("1,500곳 이상", "#C084D4", "14px"),
+            ("시도별 그룹 마커", "linear-gradient(135deg,#F8C4D8,#DAC4FF)", "12px"),
+            ("500곳 미만", "#FFD2E3", "10px"),
+            ("500-1,500곳", "#CCBEFA", "12px"),
+            ("1,500곳 이상", "#A08CFF", "14px"),
         ]
         legend_html = "".join(
             f'<span style="display:inline-flex;align-items:center;margin:2px 10px 2px 0;font-size:11px;color:#7B4F8A;font-weight:700">'
@@ -262,11 +310,11 @@ def build_map_html(places: list[dict], key: str, course_places: list[dict] = Non
 <style>
   body{{margin:0;padding:0;font-family:'Malgun Gothic',sans-serif;background:transparent}}
   #map{{width:100%;height:520px}}
-  .legend{{
+    .legend{{
     position:absolute;bottom:24px;left:10px;
-    background:rgba(255,255,255,0.95);
+    background:rgba(255,255,255,0.98);
     padding:8px 12px;border-radius:12px;z-index:5;
-    box-shadow:0 2px 12px rgba(180,100,140,0.18);
+    box-shadow:0 2px 14px rgba(130,80,140,0.22);
     display:flex;flex-wrap:wrap;max-width:calc(100% - 24px)
   }}
   .iw{{padding:12px;min-width:190px;max-width:240px;font-family:'Malgun Gothic',sans-serif}}
@@ -296,21 +344,20 @@ def build_map_html(places: list[dict], key: str, course_places: list[dict] = Non
   }}
   .prov-wrap{{
     position:relative;display:flex;flex-direction:column;align-items:center;
-    transform:translateY(-8px);cursor:pointer;user-select:none
+    transform:translate(var(--prov-dx,0px),calc(-8px + var(--prov-dy,0px)));cursor:pointer;user-select:none
   }}
   .prov-bubble{{
-    min-width:44px;height:44px;padding:0 10px;border-radius:999px;
-    background:linear-gradient(135deg,#FFD6E7 0%,#E9D5FF 100%);
-    color:#7B4F8A;font-size:15px;font-weight:900;
-    display:flex;align-items:center;justify-content:center;
+    min-width:52px;min-height:52px;padding:8px 12px 7px;border-radius:999px;
+    background:var(--prov-bg, linear-gradient(135deg,#F8C4D8 0%,#DAC4FF 100%));
+    color:var(--prov-text,#6D4E88);display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:3px;line-height:1;
     border:3px solid rgba(255,255,255,0.96);
-    box-shadow:0 8px 22px rgba(192,132,212,0.28),0 2px 8px rgba(255,143,171,0.2)
+    box-shadow:0 8px 22px rgba(120,80,180,0.22),0 2px 8px rgba(255,143,171,0.2)
   }}
-  .prov-label{{
-    margin-top:5px;padding:3px 8px;border-radius:999px;
-    background:rgba(255,255,255,0.92);color:#8B5CF6;
+  .prov-count{{font-size:18px;font-weight:900;letter-spacing:0}}
+  .prov-name{{
     font-size:11px;font-weight:800;white-space:nowrap;
-    box-shadow:0 2px 8px rgba(180,100,140,0.16)
+    color:color-mix(in srgb, var(--prov-text,#6D4E88) 92%, white 8%)
   }}
   .list-group{{
     min-width:24px;height:24px;padding:0 6px;border-radius:999px;
@@ -325,6 +372,22 @@ def build_map_html(places: list[dict], key: str, course_places: list[dict] = Non
     box-shadow:0 2px 8px rgba(76,134,232,0.15)
   }}
   .mw{{position:relative;width:100%;height:520px}}
+  .map-toolbar{{
+    position:absolute;top:14px;left:12px;z-index:8;display:none;
+    align-items:center;gap:8px;flex-wrap:wrap;max-width:calc(100% - 24px)
+  }}
+  .map-toolbar.is-visible{{display:flex}}
+  .map-chip{{
+    background:rgba(255,255,255,0.96);border:1px solid #E9D5FF;border-radius:999px;
+    box-shadow:0 4px 14px rgba(139,92,246,0.14);padding:7px 12px;
+    font-size:12px;font-weight:800;color:#7B4F8A
+  }}
+  .map-btn{{
+    border:none;border-radius:999px;padding:7px 12px;cursor:pointer;
+    font-size:12px;font-weight:800;background:rgba(255,255,255,0.96);color:#7B4F8A;
+    box-shadow:0 4px 14px rgba(139,92,246,0.14);border:1px solid #E9D5FF
+  }}
+  .map-btn.is-active{{background:#F3E8FF;color:#6D28D9;border-color:#C4B5FD}}
   .map-error{{
     position:absolute;inset:0;display:none;align-items:center;justify-content:center;
     text-align:center;color:#7B4F8A;background:#FFF7FB;border:2px dashed #FFD6E7;
@@ -335,6 +398,12 @@ def build_map_html(places: list[dict], key: str, course_places: list[dict] = Non
 <div class="mw">
   <div id="map"></div>
   <div id="map-error" class="map-error"></div>
+  <div id="map-toolbar" class="map-toolbar">
+    <span id="map-toolbar-label" class="map-chip"></span>
+    <button id="map-toolbar-picks" class="map-btn" type="button">추천 보기</button>
+    <button id="map-toolbar-list" class="map-btn" type="button">전체 장소</button>
+    <button id="map-toolbar-reset" class="map-btn" type="button">전국 보기</button>
+  </div>
   <div class="legend">{legend_html}</div>
 </div>
 <script>
@@ -348,27 +417,8 @@ def build_map_html(places: list[dict], key: str, course_places: list[dict] = Non
   }}
 
   window.handleKakaoMapLoadError=function(){{
-    loadInlineKakaoSdk();
+    showMapError('카카오 지도 SDK를 불러오지 못했습니다.<br>JavaScript 키와 도메인 등록을 확인해 주세요.');
   }};
-
-  var inlineKakaoTried=false;
-  function loadInlineKakaoSdk(){{
-    if(inlineKakaoTried){{
-      showMapError('카카오 지도 SDK를 불러오지 못했습니다.<br>JavaScript 키와 도메인 등록을 확인해 주세요.');
-      return;
-    }}
-    inlineKakaoTried=true;
-    var sdkText={sdk_script_js};
-    if(!sdkText){{
-      showMapError('카카오 지도 SDK를 불러오지 못했습니다.<br>JavaScript 키와 도메인 등록을 확인해 주세요.');
-      return;
-    }}
-    var script=document.createElement('script');
-    script.text=sdkText;
-    script.onload=function(){{initKakaoMap();}};
-    document.head.appendChild(script);
-    window.setTimeout(initKakaoMap,0);
-  }}
 
   window.initKakaoMap=function(){{
     try{{
@@ -381,9 +431,18 @@ def build_map_html(places: list[dict], key: str, course_places: list[dict] = Non
         var iw=new kakao.maps.InfoWindow({{zIndex:1}});
         var C={cat_js};
         var S={size_js};
+        var courseOrder={course_order_js};
         var places={places_js};
         var markers=[];
         var markerItems=[];
+        var focusOverlays=[];
+        var currentProvince=null;
+        var currentProvinceMode='picks';
+        var mapToolbar=document.getElementById('map-toolbar');
+        var mapToolbarLabel=document.getElementById('map-toolbar-label');
+        var mapToolbarPicks=document.getElementById('map-toolbar-picks');
+        var mapToolbarList=document.getElementById('map-toolbar-list');
+        var mapToolbarReset=document.getElementById('map-toolbar-reset');
         var smallBlueMarkerSvg='<svg xmlns="http://www.w3.org/2000/svg" width="18" height="24" viewBox="0 0 18 24"><path d="M9 23s7-7.1 7-14A7 7 0 1 0 2 9c0 6.9 7 14 7 14z" fill="#4C86E8" stroke="white" stroke-width="2"/><circle cx="9" cy="9" r="3" fill="white" opacity=".95"/></svg>';
         var smallBlueMarkerImage=new kakao.maps.MarkerImage(
           'data:image/svg+xml;charset=UTF-8,'+encodeURIComponent(smallBlueMarkerSvg),
@@ -418,6 +477,38 @@ def build_map_html(places: list[dict], key: str, course_places: list[dict] = Non
         function clearListOverlays(){{
           listOverlays.forEach(function(o){{o.setMap(null);}});
           listOverlays=[];
+        }}
+        function clearFocusOverlays(){{
+          focusOverlays.forEach(function(o){{o.setMap(null);}});
+          focusOverlays=[];
+        }}
+        function setToolbarVisible(visible){{
+          if(!mapToolbar) return;
+          mapToolbar.className=visible ? 'map-toolbar is-visible' : 'map-toolbar';
+        }}
+        function updateToolbar(){{
+          if(!currentProvince){{
+            setToolbarVisible(false);
+            return;
+          }}
+          setToolbarVisible(true);
+          if(mapToolbarLabel) mapToolbarLabel.textContent=currentProvince+' 탐색';
+          if(mapToolbarPicks) mapToolbarPicks.className='map-btn'+(currentProvinceMode==='picks'?' is-active':'');
+          if(mapToolbarList) mapToolbarList.className='map-btn'+(currentProvinceMode==='list'?' is-active':'');
+        }}
+        function resetProvinceFocus(){{
+          currentProvince=null;
+          currentProvinceMode='picks';
+          clearFocusOverlays();
+          clearListOverlays();
+          markerItems.forEach(function(item){{item.marker.setMap(null);}});
+          hideProvinceOverlays();
+          provinceOverlays.forEach(function(o){{o.setMap(map);}});
+          updateToolbar();
+          if(provinceOverlays.length>0){{
+            map.setBounds(provinceBounds,80);
+            scheduleProvinceOverlayLayout();
+          }}
         }}
         function showListMarkers(selectedProvince, fitToBounds){{
           var bounds=new kakao.maps.LatLngBounds();
@@ -457,9 +548,156 @@ def build_map_html(places: list[dict], key: str, course_places: list[dict] = Non
           }}
           if(fitToBounds&&shown>0){{map.setBounds(bounds,60);}}
         }}
+        function buildProvincePicks(province){{
+          var rank={{}};
+          courseOrder.forEach(function(name, index){{ rank[name]=index; }});
+          var pool=places.filter(function(p){{ return (p.province||'정보없음')===province && p.mapy && p.mapx; }});
+          pool.sort(function(a,b){{
+            var rankA=(rank[a.content_type_name]!==undefined)?rank[a.content_type_name]:courseOrder.length;
+            var rankB=(rank[b.content_type_name]!==undefined)?rank[b.content_type_name]:courseOrder.length;
+            if(rankA!==rankB) return rankA-rankB;
+            return String(a.title||'').localeCompare(String(b.title||''), 'ko');
+          }});
+          var picks=[];
+          var seenCats={{}};
+          pool.forEach(function(p){{
+            if(picks.length>=4) return;
+            var cat=p.content_type_name||'기타';
+            if(seenCats[cat]) return;
+            picks.push(p);
+            seenCats[cat]=true;
+          }});
+          if(picks.length<4){{
+            pool.forEach(function(p){{
+              if(picks.length>=4) return;
+              if(picks.some(function(existing){{ return existing.title===p.title; }})) return;
+              picks.push(p);
+            }});
+          }}
+          return picks;
+        }}
+        function showProvincePicks(province){{
+          var picks=buildProvincePicks(province);
+          var bounds=new kakao.maps.LatLngBounds();
+          clearFocusOverlays();
+          clearListOverlays();
+          markerItems.forEach(function(item){{item.marker.setMap(null);}});
+          var nums=['①','②','③','④'];
+          picks.forEach(function(p, i){{
+            var pos=new kakao.maps.LatLng(p.mapy,p.mapx);
+            bounds.extend(pos);
+            var el=document.createElement('div');
+            el.className='cp-wrap';
+            var color=cpPalette[i%cpPalette.length];
+            el.style.setProperty('--cp-light',color.light);
+            el.style.setProperty('--cp-main',color.main);
+            el.style.setProperty('--cp-deep',color.deep);
+            el.style.setProperty('--cp-text',color.text);
+            el.innerHTML='<div class="cp">'+nums[i]+'</div><div class="cp-label">'+(p.title||'추천 장소')+'</div>';
+            var overlay=new kakao.maps.CustomOverlay({{position:pos,content:el,yAnchor:1.15,zIndex:10}});
+            focusOverlays.push(overlay);
+            overlay.setMap(map);
+          }});
+          if(picks.length>1){{
+            map.setBounds(bounds,80);
+          }}else if(picks.length===1){{
+            map.setCenter(bounds.getSouthWest());
+            map.setLevel(7);
+          }}else{{
+            showListMarkers(province,true);
+          }}
+        }}
+        function activateProvince(province, mode){{
+          currentProvince=province;
+          currentProvinceMode=mode||'picks';
+          hideProvinceOverlays();
+          iw.close();
+          if(currentProvinceMode==='list'){{
+            clearFocusOverlays();
+            showListMarkers(province,true);
+          }}else{{
+            showProvincePicks(province);
+          }}
+          updateToolbar();
+        }}
         var provinceOverlays=[];
+        var provinceBounds=new kakao.maps.LatLngBounds();
+        var provinceOverlayItems=[];
         function hideProvinceOverlays(){{
           provinceOverlays.forEach(function(o){{o.setMap(null);}});
+        }}
+        function setProvinceOverlayOffset(item){{
+          item.el.style.setProperty('--prov-dx', Math.round(item.dx) + 'px');
+          item.el.style.setProperty('--prov-dy', Math.round(item.dy) + 'px');
+        }}
+        function baseProvinceOffset(name){{
+          var offsets={{
+            '서울': {{dx:18, dy:-34}},
+            '경기': {{dx:-34, dy:8}},
+            '인천': {{dx:-54, dy:-6}},
+            '강원': {{dx:18, dy:-24}},
+            '충북': {{dx:34, dy:-8}},
+            '충남': {{dx:-44, dy:4}},
+            '세종': {{dx:6, dy:24}},
+            '대전': {{dx:-18, dy:24}},
+            '전북': {{dx:-38, dy:14}},
+            '광주': {{dx:-34, dy:30}},
+            '전남': {{dx:-8, dy:26}},
+            '경북': {{dx:36, dy:-4}},
+            '대구': {{dx:2, dy:28}},
+            '울산': {{dx:44, dy:12}},
+            '경남': {{dx:6, dy:18}},
+            '부산': {{dx:32, dy:34}},
+            '제주': {{dx:0, dy:10}},
+          }};
+          return offsets[name] || {{dx:0, dy:0}};
+        }}
+        function scheduleProvinceOverlayLayout(){{
+          if(!provinceOverlayItems.length) return;
+          requestAnimationFrame(function(){{
+            requestAnimationFrame(applyProvinceOverlayLayout);
+          }});
+        }}
+        function applyProvinceOverlayLayout(){{
+          if(!provinceOverlayItems.length) return;
+          provinceOverlayItems.forEach(function(item){{
+            item.dx=item.baseDx||0;
+            item.dy=item.baseDy||0;
+            setProvinceOverlayOffset(item);
+          }});
+          for(var iter=0;iter<14;iter++){{
+            var moved=false;
+            for(var i=0;i<provinceOverlayItems.length;i++){{
+              for(var j=i+1;j<provinceOverlayItems.length;j++){{
+                var a=provinceOverlayItems[i];
+                var b=provinceOverlayItems[j];
+                var ra=a.el.getBoundingClientRect();
+                var rb=b.el.getBoundingClientRect();
+                var overlapX=Math.min(ra.right,rb.right)-Math.max(ra.left,rb.left);
+                var overlapY=Math.min(ra.bottom,rb.bottom)-Math.max(ra.top,rb.top);
+                if(overlapX < 10 || overlapY < 8) continue;
+                var ax=(ra.left+ra.right)/2;
+                var ay=(ra.top+ra.bottom)/2;
+                var bx=(rb.left+rb.right)/2;
+                var by=(rb.top+rb.bottom)/2;
+                var dx=ax-bx;
+                var dy=ay-by;
+                if(Math.abs(dx) < 1) dx=(i%2===0?1:-1);
+                if(Math.abs(dy) < 1) dy=(j%2===0?1:-1);
+                var distance=Math.sqrt(dx*dx+dy*dy)||1;
+                var pushX=(overlapX+14)*0.2*(dx/distance);
+                var pushY=(overlapY+12)*0.16*(dy/distance);
+                a.dx=Math.max(-76,Math.min(76,a.dx+pushX));
+                b.dx=Math.max(-76,Math.min(76,b.dx-pushX));
+                a.dy=Math.max(-40,Math.min(40,a.dy+pushY));
+                b.dy=Math.max(-40,Math.min(40,b.dy-pushY));
+                setProvinceOverlayOffset(a);
+                setProvinceOverlayOffset(b);
+                moved=true;
+              }}
+            }}
+            if(!moved) break;
+          }}
         }}
         function formatCount(count){{
           if(count>=1000){{
@@ -467,6 +705,15 @@ def build_map_html(places: list[dict], key: str, course_places: list[dict] = Non
             return value.replace(/\\.0$/,'')+'k';
           }}
           return String(count);
+        }}
+        function provinceBubbleStyle(count){{
+          if(count >= 1500){{
+            return {{bg:'#A08CFF', text:'#4A3D8F'}};
+          }}
+          if(count >= 500){{
+            return {{bg:'#CCBEFA', text:'#5F528F'}};
+          }}
+          return {{bg:'#FFD2E3', text:'#8F4B69'}};
         }}
         var cp={course_js};
         var nums=['①','②','③','④','⑤','⑥','⑦','⑧'];
@@ -513,32 +760,54 @@ def build_map_html(places: list[dict], key: str, course_places: list[dict] = Non
     groups[prov].lat+=lat;
     groups[prov].lng+=lng;
   }});
-  var provinceBounds=new kakao.maps.LatLngBounds();
-  Object.keys(groups).forEach(function(name){{
-    var g=groups[name];
-    var pos=new kakao.maps.LatLng(g.lat/g.count,g.lng/g.count);
-    var el=document.createElement('div');
-    el.className='prov-wrap';
-    el.innerHTML='<div class="prov-bubble">'+formatCount(g.count)+'</div><div class="prov-label">'+name+'</div>';
-    el.addEventListener('click',(function(prov){{return function(){{
-      hideProvinceOverlays();
-      iw.close();
-      showListMarkers(prov,true);
-      map.setLevel(Math.min(map.getLevel(),9));
+  provinceOverlayItems=[];
+          Object.keys(groups).forEach(function(name){{
+            var g=groups[name];
+            var pos=new kakao.maps.LatLng(g.lat/g.count,g.lng/g.count);
+            var el=document.createElement('div');
+            el.className='prov-wrap';
+            var ps=provinceBubbleStyle(g.count);
+            el.innerHTML='<div class="prov-bubble"><div class="prov-count">'+formatCount(g.count)+'</div><div class="prov-name">'+name+'</div></div>';
+            var elBubble=el.firstElementChild;
+            if(elBubble){{
+              elBubble.style.setProperty('--prov-bg', ps.bg);
+              elBubble.style.setProperty('--prov-text', ps.text);
+            }}
+            el.addEventListener('click',(function(prov){{return function(){{
+              activateProvince(prov,'picks');
     }};}})(name));
     var overlay=new kakao.maps.CustomOverlay({{position:pos,content:el,yAnchor:0.85,zIndex:7}});
+    var baseOffset=baseProvinceOffset(name);
     provinceOverlays.push(overlay);
+    provinceOverlayItems.push({{
+      overlay:overlay,el:el,dx:baseOffset.dx,dy:baseOffset.dy,baseDx:baseOffset.dx,baseDy:baseOffset.dy
+    }});
     overlay.setMap(map);
     provinceBounds.extend(pos);
   }});
-  if(provinceOverlays.length>0){{map.setBounds(provinceBounds,80);}}
+  if(provinceOverlays.length>0){{
+    map.setBounds(provinceBounds,80);
+    kakao.maps.event.addListener(map,'idle',scheduleProvinceOverlayLayout);
+    scheduleProvinceOverlayLayout();
+  }}
 }}
+        if(mapToolbarPicks){{
+          mapToolbarPicks.addEventListener('click', function(){{
+            if(currentProvince) activateProvince(currentProvince,'picks');
+          }});
+        }}
+        if(mapToolbarList){{
+          mapToolbarList.addEventListener('click', function(){{
+            if(currentProvince) activateProvince(currentProvince,'list');
+          }});
+        }}
+        if(mapToolbarReset){{
+          mapToolbarReset.addEventListener('click', function(){{
+            resetProvinceFocus();
+          }});
+        }}
       }});
     }}catch(e){{
-      if(!inlineKakaoTried){{
-        loadInlineKakaoSdk();
-        return;
-      }}
       showMapError('카카오 지도를 초기화하지 못했습니다.<br>'+String(e.message||e));
       console.error(e);
     }}
@@ -749,14 +1018,16 @@ with st.sidebar:
     all_gus   = sorted(_gu_base["gu_name"].dropna().unique().tolist())
     sel_gus   = st.multiselect("자치구",   all_gus,   key="sel_gus")
 
-    if st.button("🔄 필터 초기화", use_container_width=True, type="secondary"):
-        for _k in ("sel_cats", "sel_provs", "sel_gus"):
-            st.session_state.pop(_k, None)
+    def _reset_filters():
+        st.session_state["sel_cats"] = []
+        st.session_state["sel_provs"] = []
+        st.session_state["sel_gus"] = []
         st.session_state.course_cards      = []
         st.session_state.course_ai_text    = ""
         st.session_state.course_map_places = []
         st.session_state.course_name       = ""
-        st.rerun()
+        st.session_state.course_is_ai      = False
+    st.button("🔄 필터 초기화", on_click=_reset_filters, use_container_width=True, type="secondary")
 
     st.divider()
     st.header("🌤️ 날씨")
